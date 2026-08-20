@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connect 4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>CONNECT<span class="four">4</span></h1>
+    <p class="tagline">with a bitboard alpha-beta solver</p>
+  </header>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Mode</label>
+      <div class="segmented" id="mode-select">
+        <button data-mode="ai" class="active">vs Solver</button>
+        <button data-mode="2p">2 Players</button>
+      </div>
+    </div>
+    <div class="control-group" id="difficulty-group">
+      <label>Search depth</label>
+      <div class="segmented" id="difficulty-select">
+        <button data-level="easy">Easy</button>
+        <button data-level="medium" class="active">Medium</button>
+        <button data-level="hard">Hard</button>
+        <button data-level="perfect">Perfect</button>
+      </div>
+    </div>
+    <div class="control-group">
+      <label>&nbsp;</label>
+      <div class="btn-row">
+        <button id="hint-btn" class="btn ghost">💡 Hint</button>
+        <button id="undo-btn" class="btn ghost">↩ Undo</button>
+        <button id="new-game-btn" class="btn primary">New Game</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="player-chip" id="p1-chip">
+      <span class="disc-icon red"></span><span id="p1-label">You</span>
+    </div>
+    <div class="status-msg" id="status-msg">Red moves first</div>
+    <div class="player-chip" id="p2-chip">
+      <span class="disc-icon yellow"></span><span id="p2-label">Solver</span>
+    </div>
+  </div>
+
+  <div class="board-wrap">
+    <div class="hover-row" id="hover-row"></div>
+    <div class="board" id="board"></div>
+    <div class="eval-bar-wrap" title="Position evaluation">
+      <div class="eval-bar" id="eval-bar"><div class="eval-fill" id="eval-fill"></div></div>
+      <span class="eval-label" id="eval-label">0.0</span>
+    </div>
+  </div>
+
+  <div class="thinking" id="thinking" hidden>
+    <div class="spinner"></div><span id="thinking-text">Calculating…</span>
+  </div>
+
+  <footer>
+    Solver: bitboard negamax · alpha-beta pruning · transposition table · iterative deepening
+  </footer>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="overlay-card">
+    <div class="overlay-emoji" id="overlay-emoji">🏆</div>
+    <h2 id="overlay-title">Red wins!</h2>
+    <p id="overlay-sub"></p>
+    <button class="btn primary" id="overlay-btn">Play again</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
