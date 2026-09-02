@@ -4,12 +4,12 @@ const COLS = 7, ROWS = 6;
 
 // ---------------- difficulty presets (search budget, not "AI") ----------------
 const LEVELS = {
-  easy:    { maxDepth: 2,  timeMs: 200,   fuzz: 40 }, // shallow + noisy
-  medium:  { maxDepth: 9,  timeMs: 800,   fuzz: 0 },
-  hard:    { maxDepth: 15, timeMs: 2500,  fuzz: 0 },
-  perfect: { maxDepth: 42, timeMs: 7000, fuzz: 0 },
+  easy:    { maxDepth: 2,  timeMs: 200,  fuzz: 40 }, // shallow + noisy
+  medium:  { maxDepth: 9,  timeMs: 500,  fuzz: 0 },
+  hard:    { maxDepth: 15, timeMs: 1200, fuzz: 0 },
+  perfect: { maxDepth: 42, timeMs: 2500, fuzz: 0 },
 };
-const EVAL_BUDGET = { maxDepth: 10, timeMs: 400 };
+const EVAL_BUDGET = { maxDepth: 12, timeMs: 250 };
 const WIN_SCORE = 100000;
 
 // ---------------- state ----------------
@@ -161,10 +161,15 @@ function playMove(col) {
 
   current = current === 1 ? 2 : 1;
   updateStatus();
-  refreshEval();
 
+  // In solver mode the eval bar is driven entirely by the solver's own search:
+  // negamax makes the value it returns for its turn identical to the value of
+  // the position it leaves behind, so a second, shallower search would only
+  // duplicate work and downgrade a proven win back to a heuristic guess.
   if (mode === 'ai' && current === 2 && !gameOver) {
     solverMove();
+  } else if (mode === '2p') {
+    refreshEval();
   }
 }
 
@@ -210,6 +215,9 @@ async function solverMove() {
     const ok = res.results.filter(r => r.score >= res.score - budget.fuzz);
     col = ok[Math.floor(Math.random() * ok.length)].col;
   }
+
+  // res.score is Yellow's view of this position; the eval bar is Red's.
+  setEval(-res.score, res.exact);
 
   thinkingEl.hidden = true;
   busy = false;
