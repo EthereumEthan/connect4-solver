@@ -796,21 +796,26 @@
     fillStrategies();
     wire();
     /*
-     * Photo scanning is DISABLED pending accuracy work.
+     * Photo scanning is DISABLED: the recogniser is overfit to its own test data.
      *
-     * catan-vision.js loads and runs end to end without errors, but measured
-     * against synthetic boards with known ground truth it reads only ~39% of
-     * hex resources and ~25% of pip values correctly — barely above the ~17%
-     * you would get by guessing. That was on flat, evenly lit, undistorted
-     * renders, i.e. the easiest possible input; a working pipeline should be
-     * near perfect there. Every corner ordering and winding direction was
-     * tried (12 variants) and none rescued it, so this is not a calibration
-     * convention mismatch.
+     * catan-vision.js scores ~99% resource / ~99% pip accuracy on the synthetic
+     * corpus it was developed against — that result reproduces exactly, so it is
+     * real. But rendered through a SECOND, independently written synthetic
+     * renderer (different tile colours, different font, different pip drawing)
+     * it collapses to ~26% resource and ~23% pip, against ~17% for guessing,
+     * and produces 6-vs-9 confusions that its own corpus reports as zero.
+     *
+     * Both renderers are equally arbitrary models of a Catan board, so a drop
+     * from 99% to 26% across that swap says the classifier learned one
+     * generator's colour prototypes and glyphs rather than the structure of a
+     * Catan board. It has never been tested against a real photograph. Real
+     * boards are a third distribution, and nothing here predicts which of the
+     * two numbers it would land nearer.
      *
      * The whole flow behind this flag is wired and ready — file load, draggable
-     * corner handles, parse, per-hex correction, accept — so flipping
-     * SCAN_ENABLED to true is all that is needed once the recognition itself
-     * clears a sensible accuracy bar.
+     * corner handles, perspective parse, per-hex correction, accept. Flipping
+     * SCAN_ENABLED is all that is needed once the recogniser is calibrated
+     * against real photos and measured on held-out real photos.
      */
     var SCAN_ENABLED = false;
     var scanBtn = $('c-scan');

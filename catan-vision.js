@@ -509,44 +509,57 @@ function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
  * Stage 1 -- global white balance / exposure, computed from the board itself
  * ========================================================================= */
 
+/* The pale cream of a Catan number token: the one near-neutral surface that
+ * appears 18 times, spread right across the board, in a known colour.  It is a
+ * far better white reference than grey-world, because a Catan board is
+ * genuinely warm and green on average -- neutralising the whole board's mean
+ * drags desert and mountains into blue hues and destroys the two hardest
+ * classifications. */
+var REF_DISC = [238, 226, 198];
+
 function computeWhiteBalance(img, cal, opts) {
   opts = opts || {};
-  var rgb = [0, 0, 0], hsv = [0, 0, 0];
-  var sumR = 0, sumG = 0, sumB = 0, n = 0, lums = [], i, ri, ai;
-  /* dense-ish sample over every hex, out to 0.82R, plus the token discs */
+  var rgb = [0, 0, 0];
+  var rs = [], gs = [], bs = [], i, ri, ai;
+
+  /* sample the token interiors (r < 0.34R).  The numeral covers only ~10% of
+   * the disc, the desert has no token at all and occluded tokens are
+   * outliers -- a per-channel MEDIAN is immune to all three. */
   for (i = 0; i < 19; i++) {
     var hx = LAYOUT_HEXES[i];
-    for (ri = 0; ri < 6; ri++) {
-      var rad = 0.10 + ri * 0.145;
+    for (ri = 0; ri < 4; ri++) {
+      var rad = 0.12 + ri * 0.073;
       for (ai = 0; ai < 24; ai++) {
-        var a = ai / 24 * 2 * Math.PI + ri * 0.13;
-        var bx = hx.x + rad * Math.cos(a), by = hx.y + rad * Math.sin(a);
-        var p = cal.homography.apply(bx, by);
+        var a = ai / 24 * 2 * Math.PI + ri * 0.19;
+        var p = cal.homography.apply(hx.x + rad * Math.cos(a), hx.y + rad * Math.sin(a));
         if (!sampleBilinear(img, p[0], p[1], rgb)) continue;
-        sumR += rgb[0]; sumG += rgb[1]; sumB += rgb[2]; n++;
-        lums.push(0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]);
+        rs.push(rgb[0]); gs.push(rgb[1]); bs.push(rgb[2]);
       }
     }
   }
-  if (!n) return { gain: [1, 1, 1], exposure: 1, samples: 0, ok: false };
+  if (rs.length < 50) return { gain: [1, 1, 1], exposure: 1, samples: rs.length, ok: false };
 
-  var mr = sumR / n, mg = sumG / n, mb = sumB / n;
-  var grey = (mr + mg + mb) / 3;
-  /* grey-world: the whole board averaged over 19 tiles of six different hues
-   * plus 18 pale tokens is a reasonable neutral reference. */
-  var gr = clamp(grey / Math.max(1, mr), 0.55, 1.85);
-  var gg = clamp(grey / Math.max(1, mg), 0.55, 1.85);
-  var gb = clamp(grey / Math.max(1, mb), 0.55, 1.85);
+  /* the paper is the bright majority of those samples; take a high percentile
+   * per channel so the dark ink is excluded entirely */
+  function pct(arr, q) {
+    var a = arr.slice().sort(function (x, y) { return x - y; });
+    return a[Math.min(a.length - 1, Math.floor(a.length * q))];
+  }
+  var dr = pct(rs, 0.70), dg = pct(gs, 0.70), db = pct(bs, 0.70);
 
-  /* exposure: put the 92nd percentile luminance (token discs, the brightest
-   * large feature on the board) at a fixed target. */
-  lums.sort(function (a, b) { return a - b; });
-  var p92 = lums[Math.min(lums.length - 1, Math.floor(lums.length * 0.92))];
-  var target = opts.exposureTarget == null ? 218 : opts.exposureTarget;
-  var expo = clamp(target / Math.max(8, p92 * (gr + gg + gb) / 3), 0.45, 2.6);
+  /* chromatic correction: ratios only, so exposure stays a separate factor */
+  var measLum = 0.299 * dr + 0.587 * dg + 0.114 * db;
+  var refLum = 0.299 * REF_DISC[0] + 0.587 * REF_DISC[1] + 0.114 * REF_DISC[2];
+  var gr = clamp((REF_DISC[0] / Math.max(1, dr)) * (measLum / refLum), 0.70, 1.45);
+  var gg = clamp((REF_DISC[1] / Math.max(1, dg)) * (measLum / refLum), 0.70, 1.45);
+  var gb = clamp((REF_DISC[2] / Math.max(1, db)) * (measLum / refLum), 0.70, 1.45);
+
+  /* exposure: put the token paper at the reference brightness */
+  var expo = clamp(refLum / Math.max(8, measLum), 0.40, 2.8);
 
   return { gain: [gr * expo, gg * expo, gb * expo], rawGain: [gr, gg, gb],
-           exposure: expo, p92: p92, samples: n, ok: true };
+           exposure: expo, discRGB: [dr, dg, db], reference: REF_DISC,
+           method: 'token-disc-reference', samples: rs.length, ok: true };
 }
 
 function applyWB(wb, rgb, out) {
@@ -567,12 +580,12 @@ function applyWB(wb, rgb, out) {
  * are the genuinely confusable pairs and are handled by extra explicit terms
  * in classifyHex() below, not by hue alone. */
 var PROTOS = [
-  { type: 'forest',    h: 127, s: 0.46, v: 0.38, wh: 1.00, ws: 0.60, wv: 1.35 },
-  { type: 'hills',     h: 20,  s: 0.67, v: 0.64, wh: 1.45, ws: 0.95, wv: 0.95 },
-  { type: 'pasture',   h: 76,  s: 0.56, v: 0.69, wh: 1.70, ws: 0.95, wv: 0.85 },
-  { type: 'fields',    h: 46,  s: 0.73, v: 0.86, wh: 1.70, ws: 1.05, wv: 1.00 },
-  { type: 'mountains', h: 0,   s: 0.06, v: 0.57, wh: 0.10, ws: 3.20, wv: 0.65 },
-  { type: 'desert',    h: 42,  s: 0.26, v: 0.86, wh: 0.75, ws: 2.40, wv: 1.70 }
+  { type: 'forest',    h: 127, s: 0.50, v: 0.335, wh: 1.00, ws: 0.60, wv: 1.35 },
+  { type: 'hills',     h: 20,  s: 0.71, v: 0.620, wh: 1.45, ws: 0.95, wv: 0.95 },
+  { type: 'pasture',   h: 78,  s: 0.58, v: 0.635, wh: 1.70, ws: 0.95, wv: 0.85 },
+  { type: 'fields',    h: 45,  s: 0.74, v: 0.810, wh: 1.70, ws: 1.05, wv: 1.00 },
+  { type: 'mountains', h: 0,   s: 0.05, v: 0.515, wh: 0.10, ws: 3.20, wv: 0.65 },
+  { type: 'desert',    h: 42,  s: 0.275, v: 0.830, wh: 0.75, ws: 2.40, wv: 1.70 }
 ];
 
 /* Sample the ring between the token edge and the hex border and return a
@@ -633,18 +646,18 @@ function typeCosts(st) {
     }
     if (p.type === 'desert') {
       /* desert must be pale: penalise saturated or dark samples hard */
-      if (st.s > 0.40) d += 7 * (st.s - 0.40) * (st.s - 0.40) / 0.02;
-      if (st.v < 0.66) d += 7 * (0.66 - st.v) * (0.66 - st.v) / 0.02;
+      if (st.s > 0.42) d += 7 * (st.s - 0.42) * (st.s - 0.42) / 0.02;
+      if (st.v < 0.70) d += 7 * (0.70 - st.v) * (0.70 - st.v) / 0.02;
     }
     if (p.type === 'hills') {
       /* hills must be reasonably saturated and not pale */
-      if (st.s < 0.36) d += 5 * (0.36 - st.s) * (0.36 - st.s) / 0.02;
+      if (st.s < 0.45) d += 5 * (0.45 - st.s) * (0.45 - st.s) / 0.02;
     }
     if (p.type === 'mountains') {
-      if (st.s > 0.22) d += 9 * (st.s - 0.22) * (st.s - 0.22) / 0.02;
+      if (st.s > 0.20) d += 9 * (st.s - 0.20) * (st.s - 0.20) / 0.02;
     }
     if (p.type === 'forest') {
-      if (st.v > 0.62) d += 3 * (st.v - 0.62) * (st.v - 0.62) / 0.02;
+      if (st.v > 0.52) d += 3 * (st.v - 0.52) * (st.v - 0.52) / 0.02;
     }
     out[p.type] = d;
     if (d < best) { second = best; best = d; }
@@ -937,6 +950,13 @@ var TEMPLATES = (function () {
   for (i = 0; i < nums.length; i++) out[nums[i]] = renderNumberMask(nums[i], TPL_N);
   return out;
 })();
+/* width profiles are attached lazily, after widthProfile() is defined */
+function ensureTemplateProfiles() {
+  var k;
+  for (k in TEMPLATES) {
+    if (!TEMPLATES[k].profile) TEMPLATES[k].profile = widthProfile(TEMPLATES[k].mask);
+  }
+}
 
 /* Reference topology of each numeral, used as the primary rotation-invariant
  * discriminator.  Derived from the glyph definitions above and true of real
@@ -948,6 +968,17 @@ var NUM_TOPOLOGY = {
   9:  { comps: 1, holes: 1 },
   10: { comps: 2, holes: 1 }, 11: { comps: 2, holes: 0 },
   12: { comps: 2, holes: 0 }
+};
+
+/* Tunables for the token reader.  Fitted on the TRAIN split of the synthetic
+ * corpus only; exposed so they can be re-fitted without editing the file. */
+var TUNE = {
+  inkWin: 0.21,        /* adaptive-threshold window, in token radii          */
+  inkDelta: 0.28,      /* how far below the local mean counts as ink         */
+  pipLo: 0.30,         /* pip area filter, multiples of the expected area    */
+  pipHi: 3.20,
+  pipCirc: 0.52,       /* minimum circularity for a pip candidate            */
+  holeMin: 0.28        /* minimum hole area, multiples of the pip area       */
 };
 
 /* Expected geometry inside a CROP_PX crop */
@@ -990,16 +1021,48 @@ function analyseToken(crop, geom) {
 
   /* ---- ink threshold: Otsu inside the disc, dark class ------------------ */
   var thr = otsu(discLum.map(function (v) { return clamp(v, 0, 255); }));
-  /* guard: if the disc is uniform there is nothing to read */
-  var hiL = median(discLum.filter(function (v) { return v >= medL; }));
-  var loL = median(discLum.filter(function (v) { return v < medL; }));
+  /* Ink covers only ~10% of the disc, so a median split measures nothing.
+   * Use percentiles: the paper is the 75th, the ink is the 3rd. */
+  var sortedL = Array.prototype.slice.call(discLum).sort(function (a, b) { return a - b; });
+  var hiL = sortedL[Math.min(sortedL.length - 1, Math.floor(sortedL.length * 0.75))];
+  var loL = sortedL[Math.floor(sortedL.length * 0.03)];
   var contrast = hiL - loL;
   thr = Math.min(thr, medL - 0.12 * Math.max(20, contrast));
 
+  /* ADAPTIVE (local) threshold.
+   * A single global threshold is dominated by the numeral's deep black, so
+   * pips -- which are small and lose most of their contrast to blur -- end up
+   * above it and disappear entirely.  Comparing each pixel to the mean of a
+   * window several times wider than a stroke keeps both, and is immune to the
+   * lighting gradient across the disc as well. */
+  var integ = new Float64Array((n + 1) * (n + 1));
+  for (j = 0; j < n; j++) {
+    var rowSum = 0;
+    for (i = 0; i < n; i++) {
+      rowSum += lum[j * n + i];
+      integ[(j + 1) * (n + 1) + (i + 1)] = integ[j * (n + 1) + (i + 1)] + rowSum;
+    }
+  }
+  function boxMean(x0, y0, x1, y1) {
+    x0 = clamp(x0, 0, n); y0 = clamp(y0, 0, n);
+    x1 = clamp(x1, 0, n); y1 = clamp(y1, 0, n);
+    var area = (x1 - x0) * (y1 - y0);
+    if (area <= 0) return medL;
+    var s = integ[y1 * (n + 1) + x1] - integ[y0 * (n + 1) + x1]
+          - integ[y1 * (n + 1) + x0] + integ[y0 * (n + 1) + x0];
+    return s / area;
+  }
+  var win = Math.max(5, Math.round(TUNE.inkWin * rt));
+  var delta = Math.max(6, TUNE.inkDelta * contrast);
   var mask = new Uint8Array(n * n), inkCount = 0;
   for (i = 0; i < discIdx.length; i++) {
     var ix = discIdx[i];
-    if (lum[ix] <= thr) { mask[ix] = 1; inkCount++; }
+    var px = ix % n, py = (ix / n) | 0;
+    var lm = boxMean(px - win, py - win, px + win + 1, py + win + 1);
+    /* the global Otsu level acts as a floor so noise alone cannot trip it */
+    if (lum[ix] <= lm - delta && lum[ix] <= medL - 0.06 * contrast) {
+      mask[ix] = 1; inkCount++;
+    }
   }
 
   var cc = connectedComponents(mask, n, n);
@@ -1032,11 +1095,11 @@ function analyseToken(crop, geom) {
   if (!present) { res.mask = mask; res.cc = cc; return res; }
 
   /* ---- separate pip candidates from numeral strokes --------------------- */
-  var pipLo = geom.pipArea * 0.30, pipHi = geom.pipArea * 3.2;
+  var pipLo = geom.pipArea * TUNE.pipLo, pipHi = geom.pipArea * TUNE.pipHi;
   var pipCand = [], numComps = [];
   for (i = 0; i < comps.length; i++) {
     var c = comps[i];
-    var roundish = c.circularity > 0.52 && c.elong < 2.4 && c.extent > 0.45;
+    var roundish = c.circularity > TUNE.pipCirc && c.elong < 2.4 && c.extent > 0.45;
     if (c.area >= pipLo && c.area <= pipHi && roundish) pipCand.push(c);
     else numComps.push(c);
   }
@@ -1171,7 +1234,7 @@ function analyseToken(crop, geom) {
   }
 
   /* ---- topology of the numeral ------------------------------------------ */
-  var minHole = Math.max(6, geom.pipArea * 0.28);
+  var minHole = Math.max(6, geom.pipArea * TUNE.holeMin);
   var holesTotal = 0, holeAreas = [];
   for (i = 0; i < numeralComps.length; i++) {
     var hh = countHoles(cc, numeralComps[i], minHole);
@@ -1323,6 +1386,38 @@ function maskIoU(a, b) {
   return uni ? inter / uni : 0;
 }
 
+/* Row/column ink-width profile of a normalised numeral mask.
+ * This is what separates 6 from 8 when blur closes a counter and the hole
+ * count goes wrong: a 6 has a NARROW top (one stroke) and a wide bottom bowl,
+ * while an 8 is wide at both ends.  Likewise 9 (narrow bottom) vs 5.  It is a
+ * shape statistic, so it survives the blur that destroys the topology. */
+function widthProfile(mask) {
+  var rows = new Float64Array(TPL_N), cols = new Float64Array(TPL_N), i, j;
+  for (j = 0; j < TPL_N; j++) {
+    var lo = -1, hi = -1;
+    for (i = 0; i < TPL_N; i++) {
+      if (mask[j * TPL_N + i]) { if (lo < 0) lo = i; hi = i; }
+    }
+    rows[j] = lo < 0 ? 0 : (hi - lo + 1) / TPL_N;
+  }
+  for (i = 0; i < TPL_N; i++) {
+    var lo2 = -1, hi2 = -1;
+    for (j = 0; j < TPL_N; j++) {
+      if (mask[j * TPL_N + i]) { if (lo2 < 0) lo2 = j; hi2 = j; }
+    }
+    cols[i] = lo2 < 0 ? 0 : (hi2 - lo2 + 1) / TPL_N;
+  }
+  return { rows: rows, cols: cols };
+}
+
+function profileDist(a, b) {
+  var s = 0, i;
+  for (i = 0; i < TPL_N; i++) {
+    s += Math.abs(a.rows[i] - b.rows[i]) + 0.6 * Math.abs(a.cols[i] - b.cols[i]);
+  }
+  return s / (TPL_N * 1.6);
+}
+
 /* 4x4 zoning density distance. */
 function zoningDist(a, b) {
   var za = new Float64Array(16), zb = new Float64Array(16), i, j;
@@ -1392,6 +1487,18 @@ function decideNumber(cands, res, geom, norm) {
     var tB = 2.0 * iouB + 1.0 * (1 - clamp(znB, 0, 1));
     scoreA += tA; scoreB += tB;
     reasons.push('template IoU ' + iouA.toFixed(2) + ' / ' + iouB.toFixed(2));
+
+    /* width profile: the blur-robust shape cue.  Weighted heavily, because
+     * when a counter closes the hole count is simply wrong and this is the
+     * only signal left that still separates 6 from 8. */
+    ensureTemplateProfiles();
+    var prof = widthProfile(norm.mask);
+    var pdA = TEMPLATES[a] ? profileDist(prof, TEMPLATES[a].profile) : 1;
+    var pdB = TEMPLATES[b] ? profileDist(prof, TEMPLATES[b].profile) : 1;
+    var pw = 2.6;
+    scoreA += pw * clamp(1 - pdA / 0.22, 0, 1);
+    scoreB += pw * clamp(1 - pdB / 0.22, 0, 1);
+    reasons.push('width-profile distance ' + pdA.toFixed(3) + ' / ' + pdB.toFixed(3));
   }
 
   /* --- 4. ink colour, when it discriminates (6/8 are red, nothing else) -- */
@@ -1410,6 +1517,139 @@ function decideNumber(cands, res, geom, norm) {
   var conf = clamp((hi - lo) / (hi + lo + 0.9) * 1.7, 0.03, 0.97);
   return { number: num, confidence: conf, scoreA: scoreA, scoreB: scoreB,
            reasons: reasons };
+}
+
+/* ===========================================================================
+ * Stage 3b -- calibration refinement from the token discs
+ *
+ * Six taps on a phone screen are worth maybe +/- 10-20 px, and the corner
+ * definition (the midpoint of a corner tile's outer edge) is not a sharp
+ * feature, so the tapped homography is only approximately right.  The number
+ * tokens, however, ARE sharp: 18 high-contrast pale discs at exactly known
+ * board positions, spread right across the board.  Locating them and
+ * re-solving the homography from those correspondences turns 6 rough taps into
+ * ~18 precise ones.  This is the single largest robustness win in the
+ * pipeline.
+ * ========================================================================= */
+
+/* Find the token disc inside a crop centred on the approximate hex centre.
+ * Returns board-space offset from that centre, or null. */
+function locateDisc(img, H, wb, bx, by, half, n) {
+  var crop = warpPatch(img, H, wb, bx, by, half, n);
+  var d = crop.data, lum = new Float64Array(n * n), vals = [], i, j;
+  for (j = 0; j < n; j++) for (i = 0; i < n; i++) {
+    var o = (j * n + i) * 4;
+    var L = 0.299 * d[o] + 0.587 * d[o + 1] + 0.114 * d[o + 2];
+    lum[j * n + i] = L;
+    vals.push(clamp(L, 0, 255));
+  }
+  var thr = otsu(vals);
+  var mask = new Uint8Array(n * n);
+  for (i = 0; i < n * n; i++) mask[i] = lum[i] > thr ? 1 : 0;
+
+  var cc = connectedComponents(mask, n, n);
+  /* expected disc radius in crop pixels */
+  var rExp = TOKEN_R / (2 * half) * n;
+  var aExp = Math.PI * rExp * rExp;
+  /* NB: the numeral and pips punch holes in the bright disc, which inflates
+   * the measured perimeter and destroys circularity -- so the disc is
+   * identified by its bounding box (hole-insensitive) instead, and located by
+   * the bbox CENTRE, which for a circle is unbiased by where the ink sits. */
+  var best = null;
+  for (i = 0; i < cc.comps.length; i++) {
+    var c = cc.comps[i];
+    if (c.area < aExp * 0.40 || c.area > aExp * 2.2) continue;
+    if (c.elong > 1.7) continue;
+    var dW = c.w / (2 * rExp), dH = c.h / (2 * rExp);
+    if (dW < 0.72 || dW > 1.35 || dH < 0.72 || dH > 1.35) continue;
+    if (Math.abs(c.w - c.h) / Math.max(c.w, c.h) > 0.28) continue;
+    var bcx = (c.minx + c.maxx) / 2, bcy = (c.miny + c.maxy) / 2;
+    /* the ink is not centred, so centroid and bbox centre differ a little --
+     * a large disagreement means this is not a clean disc */
+    var skew = Math.sqrt((c.cx - bcx) * (c.cx - bcx) + (c.cy - bcy) * (c.cy - bcy)) / rExp;
+    if (skew > 0.40) continue;
+    var dx = bcx - n / 2, dy = bcy - n / 2;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > n * 0.30) continue;
+    var score = 2 - dist / n - Math.abs(c.area - aExp) / aExp - skew;
+    if (!best || score > best.score) best = { comp: c, score: score, dist: dist,
+                                              bcx: bcx, bcy: bcy };
+  }
+  if (!best) return null;
+  /* crop pixel -> board offset */
+  var ox = (2 * (best.bcx + 0.5) / n - 1) * half;
+  var oy = (2 * (best.bcy + 0.5) / n - 1) * half;
+  return { dx: ox, dy: oy, quality: best.score, area: best.comp.area / aExp };
+}
+
+/* Iteratively re-fit the homography to the located discs. */
+function refineCalibration(img, cal, wb, opts) {
+  opts = opts || {};
+  var iters = opts.refineIterations == null ? 2 : opts.refineIterations;
+  var half = 0.78, n = 80;
+  var H = cal.homography, i, it;
+  var used = 0, lastResid = null;
+
+  for (it = 0; it < iters; it++) {
+    var src = [], dst = [], quals = [];
+    for (i = 0; i < 19; i++) {
+      var hx = LAYOUT_HEXES[i];
+      var hit = locateDisc(img, H, wb, hx.x, hx.y, half, n);
+      if (!hit) continue;
+      /* the located centre, expressed in board space, then in image space */
+      var p = H.apply(hx.x + hit.dx, hx.y + hit.dy);
+      src.push([hx.x, hx.y]);
+      dst.push(p);
+      quals.push(hit.quality);
+    }
+    if (src.length < 8) {
+      return { ok: false, reason: 'only ' + src.length +
+               ' token discs could be located (need 8)', used: src.length };
+    }
+    var H2 = solveHomography(src, dst);
+    if (!H2) return { ok: false, reason: 'refined homography was singular', used: src.length };
+
+    /* sanity: the refinement must not move the board by more than half a hex */
+    var maxMove = 0;
+    for (i = 0; i < 19; i++) {
+      var a = H.apply(LAYOUT_HEXES[i].x, LAYOUT_HEXES[i].y);
+      var b = H2.apply(LAYOUT_HEXES[i].x, LAYOUT_HEXES[i].y);
+      var m = Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
+      if (m > maxMove) maxMove = m;
+    }
+    if (maxMove > 0.55 * cal.meanScalePx) {
+      return { ok: false, reason: 'refinement tried to move the board by ' +
+               maxMove.toFixed(0) + ' px, which is implausible; keeping the tapped corners',
+               used: src.length };
+    }
+    /* residual of the disc fit */
+    var resid = 0;
+    for (i = 0; i < src.length; i++) {
+      var q = H2.apply(src[i][0], src[i][1]);
+      resid += Math.sqrt((q[0] - dst[i][0]) * (q[0] - dst[i][0]) +
+                         (q[1] - dst[i][1]) * (q[1] - dst[i][1]));
+    }
+    lastResid = resid / src.length;
+    used = src.length;
+    H = H2;
+  }
+
+  /* rebuild the derived fields */
+  var centres = [], scales = [], meanScale = 0;
+  for (i = 0; i < 19; i++) {
+    centres.push(H.apply(LAYOUT_HEXES[i].x, LAYOUT_HEXES[i].y));
+    scales.push(H.scaleAt(LAYOUT_HEXES[i].x, LAYOUT_HEXES[i].y));
+    meanScale += scales[i];
+  }
+  meanScale /= 19;
+  var corners = [];
+  for (i = 0; i < 6; i++) corners.push(H.apply(BOARD_CORNERS[i][0], BOARD_CORNERS[i][1]));
+
+  return {
+    ok: true, homography: H, hexCentres: centres, hexScalePx: scales,
+    meanScalePx: meanScale, corners: corners,
+    discsUsed: used, discResidualPx: lastResid
+  };
 }
 
 /* ===========================================================================
@@ -1547,7 +1787,43 @@ function validateBoard(board) {
     }
   }
 
-  return { ok: problems.length === 0, problems: problems };
+  /* Delegate the authoritative rules check to catan-data.js when it is loaded,
+   * so there is exactly one definition of "a legal board" in the app.  Its
+   * errors are merged in; anything it finds that we did not is reported as an
+   * extra problem.  Red-number adjacency is a SETUP rule, not something a
+   * photograph can be wrong about, so it is downgraded to a warning. */
+  var external = null;
+  var CD = root && root.CatanData;
+  if (CD && typeof CD.validateBoard === 'function') {
+    try {
+      external = CD.validateBoard(board);
+      var seen = {}, pi;
+      for (pi = 0; pi < problems.length; pi++) seen[problems[pi].message] = 1;
+      for (pi = 0; pi < (external.errors || []).length; pi++) {
+        var msg = external.errors[pi];
+        var isAdjacency = /red numbers adjacent/i.test(msg);
+        var dup = /expected|legal set|missing a number|must not have a number|unknown type|illegal number/i.test(msg);
+        if (isAdjacency) {
+          problems.push({ code: 'red-adjacency', severity: 'warning',
+            message: 'CatanData: ' + msg +
+              ' (a setup rule -- a real photo can legitimately violate it)',
+            hexIds: [] });
+        } else if (!dup) {
+          problems.push({ code: 'catan-data', severity: 'error',
+            message: 'CatanData: ' + msg, hexIds: [] });
+        }
+      }
+    } catch (e) { external = null; }
+  }
+
+  var hard = [];
+  for (var qi = 0; qi < problems.length; qi++) {
+    if (problems[qi].severity !== 'warning') hard.push(problems[qi]);
+  }
+  return { ok: hard.length === 0, problems: problems,
+           errors: hard.length, warnings: problems.length - hard.length,
+           externalValidator: external ? 'CatanData.validateBoard' : null,
+           externalOk: external ? external.ok : null };
 }
 
 /* ===========================================================================
@@ -1636,6 +1912,25 @@ function analyzeBoard(image, opts) {
   var wb = (opts.whiteBalance === false)
     ? { gain: [1, 1, 1], exposure: 1, samples: 0, ok: false, disabled: true }
     : computeWhiteBalance(img, cal, opts);
+
+  /* refine the homography from the token discs (6 rough taps -> ~18 precise
+   * correspondences).  Falls back silently to the tapped corners if it cannot
+   * find enough discs or if the result is implausible. */
+  var refinement = null;
+  if (opts.refine !== false) {
+    refinement = refineCalibration(img, cal, wb, opts);
+    if (refinement.ok) {
+      cal = {
+        ok: true, mode: cal.mode + '+disc-refined', corners: refinement.corners,
+        tappedCorners: cal.corners, mirroredFix: cal.mirroredFix,
+        homography: refinement.homography, residualPx: refinement.discResidualPx,
+        hexCentres: refinement.hexCentres, hexScalePx: refinement.hexScalePx,
+        meanScalePx: refinement.meanScalePx, warnings: cal.warnings
+      };
+      /* the white balance was measured through the old homography; redo it */
+      if (opts.whiteBalance !== false) wb = computeWhiteBalance(img, cal, opts);
+    }
+  }
 
   var geom = tokenGeom();
   var debug = !!opts.debug;
@@ -1857,7 +2152,14 @@ function analyzeBoard(image, opts) {
       mode: cal.mode, corners: cal.corners, homography: Array.prototype.slice.call(cal.homography.m),
       residualPx: cal.residualPx, meanScalePx: cal.meanScalePx,
       mirroredFix: cal.mirroredFix, warnings: cal.warnings,
-      source: opts.cornerSource || 'manual'
+      source: opts.cornerSource || 'manual',
+      tappedCorners: cal.tappedCorners || null,
+      refinement: refinement ? {
+        ok: refinement.ok,
+        discsUsed: refinement.discsUsed || 0,
+        discResidualPx: refinement.discResidualPx || null,
+        reason: refinement.reason || null
+      } : { ok: false, reason: 'disabled via opts.refine' }
     },
     whiteBalance: wb,
     ports: portRes,
@@ -1954,15 +2256,33 @@ function autoDetectCorners(image, opts) {
   }
   var bgH = circularMedian(bh), bgS = median(bs), bgV = median(bv);
 
+  /* We want the LAND FIELD, not the whole board.  The sea frame is a large,
+   * strongly saturated blue region that would otherwise dominate the largest
+   * blob and make the fitted hexagon far too big, so blue is excluded
+   * explicitly.  Mountains are nearly unsaturated grey, so the test cannot be
+   * "saturated" alone -- it is "not sea, not table, and bright enough". */
   var mask = new Uint8Array(w * h);
   for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
     var o2 = (j * w + i) * 4;
     rgb2hsv(d[o2], d[o2 + 1], d[o2 + 2], hsv);
-    var dh = hueDiff(hsv[0], bgH) / 60 * Math.min(hsv[1], bgS) / 0.25;
+    var isSea = (hsv[0] >= 170 && hsv[0] <= 275) && hsv[1] > 0.22;
     var ds = (hsv[1] - bgS) / 0.18, dv = (hsv[2] - bgV) / 0.22;
-    var dist = Math.sqrt(dh * dh + ds * ds + dv * dv);
-    mask[j * w + i] = (dist > 1.1 || hsv[1] > bgS + 0.18) ? 1 : 0;
+    var dhh = hueDiff(hsv[0], bgH) / 60 * Math.min(hsv[1], bgS) / 0.25;
+    var fromBg = Math.sqrt(dhh * dhh + ds * ds + dv * dv);
+    var land = !isSea && hsv[2] > 0.30 && (fromBg > 1.1 || hsv[1] > bgS + 0.15);
+    mask[j * w + i] = land ? 1 : 0;
   }
+  /* close small gaps (tile borders, token discs) so the field is one blob */
+  var closed = new Uint8Array(w * h);
+  for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
+    var on = 0;
+    for (var dy2 = -1; dy2 <= 1 && !on; dy2++) for (var dx2 = -1; dx2 <= 1; dx2++) {
+      var xx = i + dx2, yy = j + dy2;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && mask[yy * w + xx]) { on = 1; break; }
+    }
+    closed[j * w + i] = on;
+  }
+  mask = closed;
   var cc = connectedComponents(mask, w, h);
   if (!cc.comps.length) return { ok: false, reason: 'no board-like region found' };
   var big = cc.comps.slice().sort(function (a, b) { return b.area - a.area; })[0];
@@ -2061,8 +2381,17 @@ function autoDetectCorners(image, opts) {
   }
   if (!bestScore) return { ok: false, reason: 'the hexagon fit did not verify against the image' };
 
-  var conf = clamp((bestScore.tokens - 10) / 8 * 0.6 + bestScore.margin * 0.4, 0, 0.95);
-  var okFlag = bestScore.tokens >= 14 && bestScore.margin > 0.25;
+  /* The gate is deliberately strict: a proposal is only accepted when the
+   * token discs really are where it predicts.  Anything less and we hand the
+   * job back to the user rather than return a wrong board. */
+  var conf = clamp((bestScore.discs - 8) / 10 * 0.6 +
+                   clamp(bestScore.margin, 0, 1) * 0.25 +
+                   (bestScore.refinedDiscs >= 12 ? 0.15 : 0), 0, 0.95);
+  var okFlag = bestScore.discs >= 12 && bestScore.refinedDiscs >= 12 &&
+               bestScore.meanBestCost < 2.0;
+  /* if the proposal verified, keep the disc-refined corners: they are far
+   * more accurate than the hexagon fit that produced them */
+  if (okFlag && bestScore.refined) bestCorners = bestScore.refined.corners;
 
   return {
     ok: okFlag,
@@ -2072,37 +2401,56 @@ function autoDetectCorners(image, opts) {
     verification: bestScore,
     scaleRefinement: bestScaleK,
     orientationAmbiguous: true,
-    reason: okFlag ? 'proposal verified against the image'
-      : 'proposal could not be verified (' + bestScore.tokens + '/18 tokens found); ' +
-        'ask the user to tap the 6 corners',
+    reason: okFlag ? 'proposal verified: ' + bestScore.refinedDiscs +
+        ' token discs found where predicted'
+      : 'proposal could not be verified (' + bestScore.discs +
+        '/18 token discs found where predicted); ask the user to tap the 6 corners',
     note: 'The land field is 6-fold symmetric, so which corner is "top-left" ' +
           'cannot be recovered from shape alone. If the board comes out rotated, ' +
           'call CatanVision.rotateCorners(corners, k) and re-analyse.'
   };
 }
 
-/* Cheap verification: how many of the 19 hex positions look like they carry a
- * token, and how decisive the colour classification is. */
+/* Verification of a proposed calibration.
+ *
+ * The decisive test is whether the 18 pale token discs actually turn up at the
+ * 18 board positions this calibration predicts.  A wrong calibration -- one
+ * that has locked on to the sea frame, the table, or a rotated hexagon of the
+ * wrong size -- will not find them, so this is a far stronger gate than any
+ * colour statistic.  It also hands back a refined homography for free. */
 function scoreCalibration(img, corners) {
   var cal = buildCalibration(corners, {});
   if (!cal.ok) return null;
   var wb = computeWhiteBalance(img, cal, {});
-  var geom = tokenGeom(), tokens = 0, margin = 0, i;
+
+  /* how many discs sit where this calibration says they should */
+  var discs = 0, i;
   for (i = 0; i < 19; i++) {
     var hx = LAYOUT_HEXES[i];
-    var crop = warpPatch(img, cal.homography, wb, hx.x, hx.y, CROP_HALF, 64);
-    var g2 = { tokenR: 64 * TOKEN_R / (2 * CROP_HALF) };
-    g2.pipR = 0.070 * g2.tokenR;
-    g2.pipArea = Math.PI * g2.pipR * g2.pipR;
-    g2.pipSpacing = 0.24 * g2.tokenR;
-    var tk = analyseToken(crop, g2);
-    if (tk.present) tokens++;
+    if (locateDisc(img, cal.homography, wb, hx.x, hx.y, 0.78, 64)) discs++;
+  }
+
+  /* how well the tile colours match ANY legal Catan resource */
+  var bestCost = 0, margin = 0;
+  for (i = 0; i < 19; i++) {
     var st = sampleHexRing(img, cal, wb, i);
     var costs = typeCosts(st);
+    bestCost += costs._best;
     margin += (costs._second - costs._best) / (costs._second + costs._best + 0.6);
   }
-  return { tokens: tokens, margin: margin / 19,
-           score: tokens + margin / 19 * 6 };
+  bestCost /= 19; margin /= 19;
+
+  var refined = refineCalibration(img, cal, wb, { refineIterations: 1 });
+  return {
+    discs: discs,
+    meanBestCost: bestCost,
+    margin: margin,
+    refined: refined.ok ? refined : null,
+    refinedDiscs: refined.ok ? refined.discsUsed : 0,
+    refinedResidual: refined.ok ? refined.discResidualPx : null,
+    /* discs dominate; colour agreement breaks ties */
+    score: discs + margin * 4 - bestCost
+  };
 }
 
 /* ------------------------------------------------------------------ export */
@@ -2169,9 +2517,14 @@ root.CatanVision = {
     connectedComponents: connectedComponents,
     countHoles: countHoles,
     assign: assign,
+    widthProfile: widthProfile,
+    profileDist: profileDist,
     tokenGeom: tokenGeom,
+    TUNE: TUNE,
     rgb2hsv: rgb2hsv,
-    scoreCalibration: scoreCalibration
+    scoreCalibration: scoreCalibration,
+    refineCalibration: refineCalibration,
+    locateDisc: locateDisc
   }
 };
 
