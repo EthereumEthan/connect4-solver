@@ -532,6 +532,201 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * photo scanner
+   *
+   * The handles overlay uses a viewBox equal to the image's natural size, so
+   * handle coordinates ARE image coordinates and no manual scaling is needed
+   * however the canvas is laid out by CSS.
+   * ------------------------------------------------------------------ */
+  var scanImg = null, corners = null, scanResult = null, dragIdx = -1;
+
+  function openScan() {
+    if (!V) return;
+    $('c-scan-overlay').hidden = false;
+  }
+  function closeScan() { $('c-scan-overlay').hidden = true; }
+
+  function loadPhoto(file) {
+    var img = new Image();
+    img.onload = function () {
+      scanImg = img;
+      var cv = $('c-photo');
+      cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+      cv.getContext('2d').drawImage(img, 0, 0);
+      var sv = $('c-handles');
+      sv.setAttribute('viewBox', '0 0 ' + img.naturalWidth + ' ' + img.naturalHeight);
+
+      corners = null;
+      if (V.autoDetectCorners) {
+        try {
+          var auto = V.autoDetectCorners(cv);
+          if (auto && auto.ok && auto.corners && auto.corners.length >= 4) corners = auto.corners.slice(0, 6);
+        } catch (e) { /* fall through to the default hexagon */ }
+      }
+      if (!corners) corners = defaultCorners(img.naturalWidth, img.naturalHeight);
+      drawHandles();
+      $('c-parse').disabled = false;
+      $('c-accept').disabled = true;
+      $('c-scan-result').innerHTML = '<p class="hint-text">Drag the handles onto the six outer ' +
+        'corners of the hex field, then press <strong>Read board</strong>.</p>';
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = function () {
+      $('c-scan-result').innerHTML = '<p class="hint-text">Could not load that image.</p>';
+    };
+    img.src = URL.createObjectURL(file);
+  }
+
+  /* a regular hexagon inscribed in the frame, pointy-top like the board */
+  function defaultCorners(w, h) {
+    var cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.45, out = [];
+    for (var i = 0; i < 6; i++) {
+      var a = (Math.PI / 180) * (60 * i + 90);
+      out.push({ x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) });
+    }
+    return out;
+  }
+
+  function drawHandles() {
+    var sv = $('c-handles');
+    while (sv.firstChild) sv.removeChild(sv.firstChild);
+    if (!corners) return;
+    var r = (scanImg ? Math.max(scanImg.naturalWidth, scanImg.naturalHeight) : 800) * 0.018;
+
+    var poly = svgEl('polygon');
+    poly.setAttribute('points', corners.map(function (c) { return c.x + ',' + c.y; }).join(' '));
+    poly.setAttribute('class', 'scan-outline');
+    poly.setAttribute('stroke-width', r * 0.22);
+    sv.appendChild(poly);
+
+    for (var i = 0; i < corners.length; i++) {
+      var c = svgEl('circle');
+      c.setAttribute('cx', corners[i].x); c.setAttribute('cy', corners[i].y);
+      c.setAttribute('r', r);
+      c.setAttribute('class', 'scan-handle');
+      c.setAttribute('stroke-width', r * 0.22);
+      c.setAttribute('data-corner', i);
+      sv.appendChild(c);
+    }
+  }
+
+  function svgPoint(evt) {
+    var sv = $('c-handles');
+    var pt = sv.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    var m = sv.getScreenCTM();
+    return m ? pt.matrixTransform(m.inverse()) : { x: 0, y: 0 };
+  }
+
+  function wireHandles() {
+    var sv = $('c-handles');
+    sv.addEventListener('pointerdown', function (e) {
+      var t = e.target.getAttribute && e.target.getAttribute('data-corner');
+      if (t === null || t === undefined) return;
+      dragIdx = +t;
+      sv.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    sv.addEventListener('pointermove', function (e) {
+      if (dragIdx < 0) return;
+      var p = svgPoint(e);
+      corners[dragIdx] = { x: p.x, y: p.y };
+      drawHandles();
+      e.preventDefault();
+    });
+    function end(e) {
+      if (dragIdx < 0) return;
+      dragIdx = -1;
+      try { sv.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+    }
+    sv.addEventListener('pointerup', end);
+    sv.addEventListener('pointercancel', end);
+  }
+
+  function parsePhoto() {
+    if (!scanImg || !V || !V.analyzeBoard) return;
+    var res;
+    try {
+      res = V.analyzeBoard($('c-photo'), { corners: corners });
+    } catch (err) {
+      $('c-scan-result').innerHTML = '<p class="hint-text">Reading failed: ' + err.message + '</p>';
+      return;
+    }
+    if (!res || !res.ok) {
+      $('c-scan-result').innerHTML = '<p class="hint-text">Could not read the board: ' +
+        ((res && res.error) || 'unknown error') + '</p>';
+      return;
+    }
+    scanResult = res;
+    $('c-accept').disabled = false;
+    renderScanResult();
+  }
+
+  function renderScanResult() {
+    var res = scanResult;
+    var val = D.validateBoard(res.board);
+    var lowCount = 0;
+    var html = '';
+    for (var i = 0; i < res.hexes.length; i++) {
+      var h = res.hexes[i];
+      var conf = Math.min(
+        h.typeConfidence === undefined ? 1 : h.typeConfidence,
+        h.number === null ? 1 : (h.numberConfidence === undefined ? 1 : h.numberConfidence)
+      );
+      var low = conf < 0.6;
+      if (low) lowCount++;
+      html += '<div class="scan-hex' + (low ? ' low' : '') + '" data-scanhex="' + h.id + '">' +
+        '<span class="swatch" style="background:' + (TYPE_COLOR[h.type] || '#666') + '"></span>' +
+        '<span style="flex:1">' + h.type + (h.number ? ' · ' + h.number : ' · —') + '</span>' +
+        '<span>' + Math.round(conf * 100) + '%</span></div>';
+    }
+
+    $('c-scan-result').innerHTML =
+      '<p class="hint-text">' +
+        (val.ok
+          ? 'Reads as a legal board.'
+          : '<strong>Not a legal board yet:</strong> ' + val.errors.slice(0, 2).join('; ')) +
+        ' ' + lowCount + ' of 19 hexes are low confidence. Click any row to correct it — ' +
+        'click the left half to change the resource, the right half to change the number.' +
+      '</p><div class="scan-grid">' + html + '</div>';
+
+    var rows = $('c-scan-result').querySelectorAll('.scan-hex');
+    for (var k = 0; k < rows.length; k++) {
+      rows[k].addEventListener('click', function (e) {
+        var id = +this.getAttribute('data-scanhex');
+        var rect = this.getBoundingClientRect();
+        var leftHalf = (e.clientX - rect.left) < rect.width / 2;
+        var hx = scanResult.board.hexes[id];
+        if (leftHalf) {
+          var ti = D.HEX_TYPES.indexOf(hx.type);
+          hx.type = D.HEX_TYPES[(ti + 1) % D.HEX_TYPES.length];
+          if (hx.type === 'desert') hx.number = null;
+          else if (!hx.number) hx.number = 6;
+        } else if (hx.type !== 'desert') {
+          var ni = NUM_CYCLE.indexOf(hx.number);
+          var nx = NUM_CYCLE[(ni + 1) % NUM_CYCLE.length];
+          hx.number = (nx === null) ? 2 : nx;
+        }
+        /* keep the displayed row in step with the corrected board */
+        scanResult.hexes[id].type = hx.type;
+        scanResult.hexes[id].number = hx.number;
+        scanResult.hexes[id].typeConfidence = 1;
+        scanResult.hexes[id].numberConfidence = 1;
+        renderScanResult();
+      });
+    }
+  }
+
+  function acceptScan() {
+    if (!scanResult) return;
+    board = scanResult.board;
+    selected = -1;
+    $('c-detail').hidden = true;
+    closeScan();
+    recompute();
+  }
+
+  /* ------------------------------------------------------------------ *
    * boot
    * ------------------------------------------------------------------ */
   function fillStrategies() {
@@ -580,6 +775,15 @@
       $('c-detail').hidden = true; selected = -1; highlight([]);
     });
     $('c-lab-run').addEventListener('click', runLab);
+
+    $('c-scan').addEventListener('click', openScan);
+    $('c-scan-close').addEventListener('click', closeScan);
+    $('c-file').addEventListener('change', function (e) {
+      if (e.target.files && e.target.files[0]) loadPhoto(e.target.files[0]);
+    });
+    $('c-parse').addEventListener('click', parsePhoto);
+    $('c-accept').addEventListener('click', acceptScan);
+    wireHandles();
   }
 
   function build() {
@@ -591,13 +795,29 @@
     board = D.randomBoard();
     fillStrategies();
     wire();
-    /* The photo scanner is a separate module. Rather than leave a dead button,
-       say plainly that it is not available when the module has not loaded. */
+    /*
+     * Photo scanning is DISABLED pending accuracy work.
+     *
+     * catan-vision.js loads and runs end to end without errors, but measured
+     * against synthetic boards with known ground truth it reads only ~39% of
+     * hex resources and ~25% of pip values correctly — barely above the ~17%
+     * you would get by guessing. That was on flat, evenly lit, undistorted
+     * renders, i.e. the easiest possible input; a working pipeline should be
+     * near perfect there. Every corner ordering and winding direction was
+     * tried (12 variants) and none rescued it, so this is not a calibration
+     * convention mismatch.
+     *
+     * The whole flow behind this flag is wired and ready — file load, draggable
+     * corner handles, parse, per-hex correction, accept — so flipping
+     * SCAN_ENABLED to true is all that is needed once the recognition itself
+     * clears a sensible accuracy bar.
+     */
+    var SCAN_ENABLED = false;
     var scanBtn = $('c-scan');
-    if (scanBtn && !V) {
+    if (scanBtn && (!V || !SCAN_ENABLED)) {
       scanBtn.disabled = true;
-      scanBtn.title = 'Photo scanning is not available in this build';
-      scanBtn.textContent = '📷 Scan photo (unavailable)';
+      scanBtn.title = 'Photo scanning is not accurate enough to ship yet';
+      scanBtn.textContent = '📷 Scan photo (not ready)';
     }
     recompute();
   }
