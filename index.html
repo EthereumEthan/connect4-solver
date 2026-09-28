@@ -3,12 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connect 4</title>
+<title>Board Game Lab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+<nav class="tabbar" role="tablist" aria-label="Games">
+  <button role="tab" id="tab-connect4" class="tab active"
+          aria-selected="true" aria-controls="panel-connect4" tabindex="0">Connect 4</button>
+  <button role="tab" id="tab-catan" class="tab"
+          aria-selected="false" aria-controls="panel-catan" tabindex="-1">Catan</button>
+</nav>
+
+<!-- ============================ CONNECT 4 ============================ -->
+<!-- Structure and ids below are unchanged; app.js and solver.js depend on them. -->
+<section id="panel-connect4" role="tabpanel" aria-labelledby="tab-connect4" class="panel">
 <div class="app">
   <header>
     <h1>CONNECT<span class="four">4</span></h1>
@@ -78,7 +89,131 @@
     <button class="btn primary" id="overlay-btn">Play again</button>
   </div>
 </div>
+</section>
+
+<!-- ============================== CATAN ============================== -->
+<section id="panel-catan" role="tabpanel" aria-labelledby="tab-catan" class="panel" hidden>
+<div class="app catan">
+  <header>
+    <h1>CATAN<span class="four">◆</span></h1>
+    <p class="tagline">starting placement analyzer — build-rate model, not pip counting</p>
+  </header>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Board</label>
+      <div class="btn-row">
+        <button id="c-random" class="btn primary">🎲 Random</button>
+        <button id="c-reference" class="btn ghost">Reference</button>
+        <button id="c-scan" class="btn ghost">📷 Scan photo</button>
+      </div>
+    </div>
+    <div class="control-group">
+      <label>Strategy</label>
+      <select id="c-strategy" class="select"></select>
+    </div>
+    <div class="control-group">
+      <label>Heatmap</label>
+      <div class="segmented" id="c-heatmap">
+        <button data-metric="model" class="active">Build rate</button>
+        <button data-metric="pips">Naive pips</button>
+      </div>
+    </div>
+    <div class="control-group">
+      <label>Edit</label>
+      <div class="segmented" id="c-editmode">
+        <button data-edit="off" class="active">Off</button>
+        <button data-edit="resource">Resource</button>
+        <button data-edit="number">Number</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="strategy-blurb" id="c-blurb"></p>
+
+  <div class="catan-layout">
+    <div class="catan-board-wrap">
+      <svg id="c-board" class="catan-board" xmlns="http://www.w3.org/2000/svg"
+           role="img" aria-label="Catan board"></svg>
+      <div class="board-warning" id="c-warning" hidden></div>
+    </div>
+
+    <aside class="catan-side">
+      <div class="panel-card">
+        <h3>Top spots</h3>
+        <ol class="spot-list" id="c-topspots"></ol>
+      </div>
+      <div class="panel-card">
+        <h3>Best opening pairs</h3>
+        <p class="hint-text">Two settlements, scored on combined production.</p>
+        <ol class="spot-list" id="c-pairs"></ol>
+      </div>
+      <div class="panel-card">
+        <h3>Resources on this board</h3>
+        <div id="c-resources"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="panel-card detail-card" id="c-detail" hidden>
+    <button class="close-x" id="c-detail-close" aria-label="Close">×</button>
+    <h3 id="c-detail-title">Spot</h3>
+    <div id="c-detail-body"></div>
+  </div>
+
+  <div class="panel-card">
+    <h3>Strategy lab</h3>
+    <p class="hint-text">
+      Simulates many random boards, finds the best opening pair on each under every strategy, and
+      reports which archetype actually comes out ahead.
+    </p>
+    <div class="btn-row">
+      <button id="c-lab-run" class="btn primary">Run 200 boards</button>
+      <span class="lab-status" id="c-lab-status"></span>
+    </div>
+    <div id="c-lab-out"></div>
+  </div>
+
+  <footer>
+    A spot is scored by how fast it builds a target basket, given trades at its best port rate —
+    not by summing pips.
+  </footer>
+</div>
+</section>
+
+<!-- ========================== PHOTO SCANNER ========================== -->
+<div class="overlay" id="c-scan-overlay" hidden>
+  <div class="overlay-card scan-card">
+    <button class="close-x" id="c-scan-close" aria-label="Close">×</button>
+    <h2>Scan a board photo</h2>
+    <p class="hint-text" id="c-scan-help">
+      Take or choose a photo of the board, then drag the six handles onto the outer corners of the
+      hex field. Reading is not perfect — you can correct any hex before accepting.
+    </p>
+    <div class="btn-row scan-actions">
+      <label class="btn ghost file-btn">
+        📁 Choose photo<input type="file" id="c-file" accept="image/*" capture="environment" hidden>
+      </label>
+      <button id="c-parse" class="btn primary" disabled>Read board</button>
+      <button id="c-accept" class="btn primary" disabled>Use this board</button>
+    </div>
+    <div class="scan-stage">
+      <div class="scan-photo-wrap">
+        <canvas id="c-photo" class="scan-photo"></canvas>
+        <svg id="c-handles" class="scan-handles" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+      <div class="scan-result" id="c-scan-result"></div>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
+<script src="catan-geometry.js" defer></script>
+<script src="catan-data.js" defer></script>
+<script src="catan-model.js" defer></script>
+<script src="catan-lab.js" defer></script>
+<script src="catan-vision.js" defer></script>
+<script src="catan-ui.js" defer></script>
+<script src="tabs.js" defer></script>
 </body>
 </html>
