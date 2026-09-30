@@ -396,11 +396,73 @@ body { flex-direction: column; align-items: center; }
 
 .catan-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(260px, 1fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 2fr) minmax(250px, 0.82fr);
+  gap: 18px;
   width: 100%;
   align-items: start;
 }
+
+/* ---- board verdict: which plan this map favours ---- */
+.verdict {
+  width: 100%;
+  background: linear-gradient(135deg, rgba(108,92,231,.22), rgba(0,210,255,.10));
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 12px 16px;
+}
+.verdict-head { font-size: 0.95rem; }
+.verdict-head strong { color: var(--accent-2); }
+.verdict-sub { color: var(--text-dim); font-size: 0.78rem; margin-left: 6px; }
+.vchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.vchip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--panel-border);
+  font-size: 0.73rem; color: var(--text-dim);
+}
+.vchip em { font-style: normal; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.vchip.win {
+  background: linear-gradient(135deg, var(--accent), #4839b8);
+  color: #fff; border-color: transparent; font-weight: 600;
+}
+
+/* ---- hex labels ---- */
+.hex-icon { font-size: 4.4px; text-anchor: middle; pointer-events: none; }
+.hex-name {
+  font-family: inherit; font-size: 2.5px; font-weight: 800;
+  letter-spacing: 0.08em; text-anchor: middle;
+  fill: rgba(255, 255, 255, 0.95);
+  paint-order: stroke; stroke: rgba(0, 0, 0, 0.55); stroke-width: 0.7;
+  pointer-events: none;
+}
+
+/* ---- placement tiers ---- */
+.tier-badge {
+  width: 26px; height: 24px; flex: 0 0 26px;
+  display: grid; place-items: center;
+  border-radius: 7px;
+  font-size: 0.72rem; font-weight: 800;
+  color: #10131f;
+}
+.tier-Sp { background: #ffd23e; box-shadow: 0 0 12px rgba(255,210,62,.5); }
+.tier-S  { background: #ff9f40; }
+.tier-A  { background: #7fd66a; }
+.tier-B  { background: #4aa8d8; }
+.tier-C  { background: #6b7299; color: #d8dcf0; }
+
+.tier-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 10px; }
+.tier-legend > span {
+  font-size: 0.64rem; padding: 2px 7px; border-radius: 6px;
+  color: #10131f; font-weight: 800;
+}
+.tier-legend .legend-note {
+  background: none; color: var(--text-dim); font-weight: 400;
+  font-size: 0.66rem; padding-left: 2px;
+}
+.sc-scarce    { color: #ff9f40 !important; font-weight: 700; }
+.sc-plentiful { color: #6b7299 !important; }
+.res-row { grid-template-columns: 54px 1fr 84px; }
 .catan-board-wrap { position: relative; min-width: 0; }
 .catan-board {
   width: 100%;
@@ -429,9 +491,13 @@ body { flex-direction: column; align-items: center; }
 .token-pip.red { fill: #c1272d; }
 
 /* ports */
-.port-marker { fill: rgba(12, 22, 54, 0.92); stroke: var(--accent-2); stroke-width: 0.35; }
-.port-label  { font-family: inherit; font-size: 3.1px; font-weight: 700; text-anchor: middle; fill: #cfe9ff; }
-.port-link   { stroke: rgba(0, 210, 255, 0.45); stroke-width: 0.5; stroke-dasharray: 1 1; }
+.port-marker { fill: rgba(10, 20, 50, 0.95); stroke: rgba(0, 210, 255, 0.55); stroke-width: 0.3; }
+.port-marker.specific { fill: rgba(28, 46, 104, 0.97); stroke: var(--accent-2); stroke-width: 0.45; }
+.port-label  {
+  font-family: inherit; font-size: 2.45px; font-weight: 800;
+  letter-spacing: 0.04em; text-anchor: middle; fill: #d6efff;
+}
+.port-link   { stroke: rgba(0, 210, 255, 0.4); stroke-width: 0.45; stroke-dasharray: 1 1; }
 
 /* vertices / heatmap */
 .vtx { cursor: pointer; }

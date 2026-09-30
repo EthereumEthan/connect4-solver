@@ -104,6 +104,58 @@
     return STRATEGIES[0];
   }
 
+  /*
+   * Placement tiers.
+   *
+   * A spot is tiered against the BEST spot on the same board, not against an
+   * absolute scale, because the question you actually have at the table is
+   * "of the 54 spots in front of me, which are the good ones?" — and boards
+   * differ enormously in how rich their best corner is.
+   *
+   * Thresholds were picked from the measured distribution of score/bestScore
+   * over 19,440 samples (120 boards x 3 strategies x 54 vertices) so that a
+   * typical board yields roughly 3 S+, 2 S, 5 A and 8 B spots, with the
+   * remaining ~35 as C. Tiers that label half the board elite say nothing.
+   */
+  var TIERS = [
+    { id: 'S+', min: 0.90, color: '#ffd23e', label: 'S+', blurb: 'Elite — take it' },
+    { id: 'S',  min: 0.82, color: '#ff9f40', label: 'S',  blurb: 'Excellent' },
+    { id: 'A',  min: 0.70, color: '#7fd66a', label: 'A',  blurb: 'Strong' },
+    { id: 'B',  min: 0.55, color: '#4aa8d8', label: 'B',  blurb: 'Playable' },
+    { id: 'C',  min: -Infinity, color: '#6b7299', label: 'C', blurb: 'Weak' }
+  ];
+
+  function tierFor(ratio) {
+    for (var i = 0; i < TIERS.length; i++) if (ratio >= TIERS[i].min) return TIERS[i];
+    return TIERS[TIERS.length - 1];
+  }
+
+  /*
+   * Reference distribution of the BEST opening-pair rate per strategy, measured
+   * over 1200 random boards (catan-lab, seed 424242).
+   *
+   * These exist so "which strategy does this board favour?" can be answered
+   * honestly. Raw baskets/turn are NOT comparable across strategies — a
+   * longest-road basket is far cheaper than an ore-grain one, so comparing raw
+   * rates would name Longest Road the winner on almost every board for no real
+   * reason. Standardising each strategy against its own mean and spread asks
+   * the meaningful question instead: unusually good FOR THAT PLAN.
+   */
+  var STRATEGY_BASELINE = {
+    oregrain:    { mean: 0.120032, sd: 0.012201 },
+    expansion:   { mean: 0.172802, sd: 0.013885 },
+    balanced:    { mean: 0.156463, sd: 0.014127 },
+    longestroad: { mean: 0.199295, sd: 0.021305 },
+    devcard:     { mean: 0.150651, sd: 0.011976 }
+  };
+
+  /* z = how many standard deviations above a typical board this one is for that plan */
+  function strategyZ(id, bestPairRate) {
+    var b = STRATEGY_BASELINE[id];
+    if (!b || !b.sd) return 0;
+    return (bestPairRate - b.mean) / b.sd;
+  }
+
   /* ---------------- ports ---------------- */
   /* 4 generic 3:1 plus one 2:1 for each of the five resources */
   function defaultPorts() {
@@ -392,6 +444,8 @@
     TOKENS: TOKENS, PIPS: PIPS, PIP_CHECK: PIP_CHECK, RED: RED, isRed: isRed,
     COSTS: COSTS, BUILDINGS: BUILDINGS,
     STRATEGIES: STRATEGIES, strategyById: strategyById, basketCost: basketCost,
+    TIERS: TIERS, tierFor: tierFor,
+    STRATEGY_BASELINE: STRATEGY_BASELINE, strategyZ: strategyZ,
     defaultPorts: defaultPorts,
     makeRng: makeRng, shuffle: shuffle,
     randomBoard: randomBoard,

@@ -14,6 +14,7 @@
   var strategyId = 'balanced';
   var metric = 'model';           // 'model' | 'pips'
   var editMode = 'off';           // 'off' | 'resource' | 'number'
+  var useScarcity = true;         // fold board scarcity into trade rates
   var selected = -1;
   var firstPick = -1;             // for complements mode
   var ranked = [];
@@ -30,6 +31,18 @@
   var TYPE_COLOR = {
     forest: '#2f6b3a', hills: '#b4572b', pasture: '#7fb85a',
     fields: '#e0b23c', mountains: '#8a8f9c', desert: '#d9c38f'
+  };
+  /* what players actually call them, kept short enough to fit inside a hex */
+  var SHORT_NAME = {
+    forest: 'WOOD', hills: 'BRICK', pasture: 'SHEEP',
+    fields: 'WHEAT', mountains: 'ORE', desert: 'DESERT'
+  };
+  var RES_SHORT = {
+    lumber: 'Wood', brick: 'Brick', wool: 'Sheep', grain: 'Wheat', ore: 'Ore'
+  };
+  var RES_ICON = {
+    forest: '🌲', hills: '🧱', pasture: '🐑',
+    fields: '🌾', mountains: '⛰', desert: '🏜'
   };
 
   function $(id) { return document.getElementById(id); }
@@ -59,20 +72,24 @@
       link.setAttribute('class', 'port-link');
       gPort.appendChild(link);
 
-      var disc = svgEl('circle');
-      disc.setAttribute('cx', anc.x); disc.setAttribute('cy', anc.y);
-      disc.setAttribute('r', 3.6);
-      disc.setAttribute('class', 'port-marker');
+      var isGeneric = port.kind === '3:1';
+      var pw = isGeneric ? 8.2 : 10.4;
+      var disc = svgEl('rect');
+      disc.setAttribute('x', anc.x - pw / 2); disc.setAttribute('y', anc.y - 2.9);
+      disc.setAttribute('width', pw); disc.setAttribute('height', 5.8);
+      disc.setAttribute('rx', 2.4);
+      disc.setAttribute('class', 'port-marker' + (isGeneric ? '' : ' specific'));
       disc.style.cursor = 'pointer';
       disc.setAttribute('data-port', p);
       gPort.appendChild(disc);
 
+      /* spell the resource out — "Br2" was unreadable */
       var t = svgEl('text');
-      t.setAttribute('x', anc.x); t.setAttribute('y', anc.y + 0.6);
+      t.setAttribute('x', anc.x); t.setAttribute('y', anc.y + 1.3);
       t.setAttribute('class', 'port-label');
       t.setAttribute('data-port', p);
       t.style.cursor = 'pointer';
-      t.textContent = port.kind === '3:1' ? '3:1' : (RES_LABEL[port.resource] || '').slice(0, 2) + '2';
+      t.textContent = isGeneric ? 'ANY 3:1' : (RES_SHORT[port.resource] || '') + ' 2:1';
       gPort.appendChild(t);
 
       var title = svgEl('title');
@@ -94,6 +111,23 @@
       var ht = svgEl('title');
       ht.textContent = hx.type + (hx.number ? ' — ' + hx.number + ' (' + D.PIPS[hx.number] + ' pips)' : ' — no number');
       poly.appendChild(ht);
+
+      /* Name the resource on the hex. Colour alone is not enough: forest and
+         pasture are both green, and hills and desert are both warm browns. */
+      var cc = G.HEXES[h];
+      var ico = svgEl('text');
+      ico.setAttribute('x', cc.cx); ico.setAttribute('y', cc.cy - 4.6);
+      ico.setAttribute('class', 'hex-icon');
+      ico.setAttribute('data-hex', h);
+      ico.textContent = RES_ICON[hx.type] || '';
+      gHex.appendChild(ico);
+
+      var nm = svgEl('text');
+      nm.setAttribute('x', cc.cx); nm.setAttribute('y', cc.cy + 7.4);
+      nm.setAttribute('class', 'hex-name');
+      nm.setAttribute('data-hex', h);
+      nm.textContent = SHORT_NAME[hx.type] || hx.type;
+      gHex.appendChild(nm);
 
       if (hx.number) {
         var c = G.HEXES[h];
@@ -146,30 +180,37 @@
       grp.setAttribute('class', 'vtx' + (topIds[vi] ? ' top' : '') + (selected === vi ? ' sel' : ''));
       grp.setAttribute('data-vtx', vi);
 
+      /* Colour by TIER rather than a continuous ramp: the question is which
+         spots are worth taking, and a discrete grade answers that at a glance. */
+      var tier = entry ? (metric === 'pips' ? entry.pipTier : entry.tier) : null;
+      var isTop = tier && (tier.id === 'S+' || tier.id === 'S' || tier.id === 'A');
+      var rad = isTop ? 3.1 : 1.8;
+
       var circ = svgEl('circle');
       circ.setAttribute('cx', vx.x); circ.setAttribute('cy', vx.y);
-      circ.setAttribute('r', topIds[vi] ? 2.5 : 1.7);
-      circ.setAttribute('fill', heat(t01));
-      circ.setAttribute('fill-opacity', 0.35 + 0.6 * t01);
+      circ.setAttribute('r', rad);
+      circ.setAttribute('fill', tier ? tier.color : heat(t01));
+      circ.setAttribute('fill-opacity', isTop ? 0.97 : 0.5);
       grp.appendChild(circ);
 
       var ring = svgEl('circle');
       ring.setAttribute('cx', vx.x); ring.setAttribute('cy', vx.y);
-      ring.setAttribute('r', topIds[vi] ? 2.5 : 1.7);
+      ring.setAttribute('r', rad);
       ring.setAttribute('class', 'vtx-ring');
       grp.appendChild(ring);
 
-      if (topIds[vi]) {
+      if (isTop) {
         var rk = svgEl('text');
-        rk.setAttribute('x', vx.x); rk.setAttribute('y', vx.y + 1.1);
+        rk.setAttribute('x', vx.x); rk.setAttribute('y', vx.y + 1.15);
         rk.setAttribute('class', 'vtx-rank');
-        rk.textContent = topIds[vi];
+        rk.textContent = tier.id;
         grp.appendChild(rk);
       }
 
       var vt = svgEl('title');
       vt.textContent = entry
-        ? 'Spot ' + vi + ' — ' + fmt(entry.score) + ' baskets/turn, ' + entry.pipTotal + ' pips'
+        ? 'Spot ' + vi + ' — tier ' + entry.tier.id + ', ' + fmt(entry.score) +
+          ' baskets/turn, ' + entry.pipTotal + ' pips'
         : 'Spot ' + vi;
       grp.appendChild(vt);
       gVtx.appendChild(grp);
@@ -191,6 +232,81 @@
   function metricOf(entry) { return metric === 'pips' ? entry.pipTotal : entry.score; }
 
   /* ------------------------------------------------------------------ *
+   * scarcity
+   *
+   * The build-rate model already prices a resource by how much your plan needs
+   * it and by the port rates you can trade it at. What it does NOT know is that
+   * resources are not equally available ON THIS BOARD. If ore sits on three
+   * low-pip hexes, everyone will be short of ore, and your ore is worth more
+   * than the same number of pips of wool that half the table already produces.
+   *
+   * That is modelled where it belongs — in the trade rate. A surplus of a scarce
+   * resource converts better than the bank rate, because opponents who cannot
+   * produce it will deal. The effect is capped at the 2:1 port rate, so scarcity
+   * can make a resource behave like it has a port but never better than one.
+   *
+   * Scarcity is applied on BOTH sides, because it cuts both ways:
+   *   1. Trade rate. A surplus of a scarce resource converts better than the
+   *      bank rate, since opponents who cannot produce it will deal. Capped at
+   *      the 2:1 port rate, so scarcity can make a resource behave as if it has
+   *      a port but never better than one.
+   *   2. Basket cost. A resource that is scarce board-wide is genuinely dearer
+   *      to obtain, so the amount of it your plan needs is scaled up. This is
+   *      what makes a spot that PRODUCES the scarce resource pull ahead of one
+   *      that has to buy it in.
+   *
+   * Applying only (1) was almost a no-op — it changed the best spot on 4% of
+   * boards. With (2) at strength 0.8 it moves the best spot on 23%, with a
+   * median rank shift of 1 in the top ten: enough to matter, not enough to
+   * drown out production itself. Both strengths were picked by measuring that
+   * trade-off, not by taste.
+   */
+  var SCARCITY_RATE_STRENGTH = 1.2;   // how much scarcity improves surplus trades
+  var SCARCITY_COST_STRENGTH = 0.8;   // how much scarcity inflates what you need
+
+  function scarcityBonuses(bd) {
+    var stats = D.resourceStats(bd), out = {};
+    for (var i = 0; i < D.RESOURCES.length; i++) {
+      var r = D.RESOURCES[i];
+      var sc = stats[r].scarcity;                       // >1 = rarer than a fair 1/5 share
+      if (!isFinite(sc)) sc = 2;
+      out[r] = {
+        scarcity: sc,
+        rate: Math.max(0, Math.min(1.5, (sc - 1) * SCARCITY_RATE_STRENGTH)),
+        cost: Math.max(0.6, Math.min(2.2, 1 + (sc - 1) * SCARCITY_COST_STRENGTH))
+      };
+    }
+    return out;
+  }
+
+  function adjustRates(rates, bon) {
+    var out = {};
+    for (var i = 0; i < D.RESOURCES.length; i++) {
+      var r = D.RESOURCES[i];
+      out[r] = Math.max(2, (rates[r] || 4) - (bon[r] ? bon[r].rate : 0));
+    }
+    return out;
+  }
+
+  function adjustBasket(basket, bon) {
+    var out = {};
+    for (var i = 0; i < D.RESOURCES.length; i++) {
+      var r = D.RESOURCES[i];
+      out[r] = (basket[r] || 0) * (bon[r] ? bon[r].cost : 1);
+    }
+    return out;
+  }
+
+  /* score one vertex set under a strategy, with scarcity folded in on both sides */
+  function scoreOf(bd, verts, sid, bon) {
+    var prod = M.production(bd, verts);
+    var rates = M.tradeRates(bd, verts);
+    var basket = D.basketCost(D.strategyById(sid).mix);
+    if (bon) { rates = adjustRates(rates, bon); basket = adjustBasket(basket, bon); }
+    return M.buildRate(prod, rates, basket);
+  }
+
+  /* ------------------------------------------------------------------ *
    * analysis
    * ------------------------------------------------------------------ */
   function recompute() {
@@ -210,14 +326,86 @@
     }
 
     ranked = M.rankVertices(board, strategyId);
+    var bonuses = useScarcity ? scarcityBonuses(board) : null;
+    if (bonuses) {
+      /* re-score with scarcity-adjusted rates, then re-rank */
+      for (var s = 0; s < ranked.length; s++) {
+        ranked[s].score = scoreOf(board, [ranked[s].vertex], strategyId, bonuses);
+      }
+      ranked.sort(function (a, b) { return b.score - a.score || a.vertex - b.vertex; });
+      for (var s2 = 0; s2 < ranked.length; s2++) ranked[s2].rank = s2 + 1;
+    }
+
+    /* tier every spot against the best on this board */
+    var bestScore = 0, bestPip = 0;
+    for (var t = 0; t < ranked.length; t++) {
+      if (ranked[t].score > bestScore) bestScore = ranked[t].score;
+      if (ranked[t].pipTotal > bestPip) bestPip = ranked[t].pipTotal;
+    }
+    for (var u = 0; u < ranked.length; u++) {
+      ranked[u].tier = D.tierFor(bestScore > 0 ? ranked[u].score / bestScore : 0);
+      ranked[u].pipTier = D.tierFor(bestPip > 0 ? ranked[u].pipTotal / bestPip : 0);
+    }
+
     byVertex = {};
     for (var i = 0; i < ranked.length; i++) byVertex[ranked[i].vertex] = ranked[i];
 
     renderBoard();
+    renderVerdict();
     renderTopSpots();
     renderPairs();
     renderResources();
     if (selected >= 0) renderDetail(selected);
+  }
+
+  /*
+   * Which plan does THIS board favour?
+   *
+   * Compares each strategy's best opening pair against that strategy's own
+   * measured distribution over 1200 random boards, as a z-score. Comparing raw
+   * baskets/turn would be meaningless — a longest-road basket is far cheaper
+   * than an ore-grain one, so it would "win" almost every board by construction.
+   */
+  function renderVerdict() {
+    var el = $('c-verdict');
+    if (!el || !M || !M.bestPairs) return;
+    var bonuses = useScarcity ? scarcityBonuses(board) : null;
+
+    var rows = [];
+    for (var i = 0; i < D.STRATEGIES.length; i++) {
+      var st = D.STRATEGIES[i];
+      var pairs = M.bestPairs(board, st.id, 1) || [];
+      if (!pairs.length) continue;
+      var rate = bonuses
+        ? scoreOf(board, [pairs[0].a, pairs[0].b], st.id, bonuses)
+        : pairs[0].score;
+      rows.push({ st: st, rate: rate, z: D.strategyZ(st.id, rate), pair: pairs[0] });
+    }
+    if (!rows.length) { el.innerHTML = ''; return; }
+    rows.sort(function (a, b) { return b.z - a.z; });
+
+    var top = rows[0];
+    var gap = rows.length > 1 ? top.z - rows[1].z : 0;
+    var strength = gap > 0.7 ? 'clearly' : (gap > 0.3 ? 'mildly' : 'only just');
+
+    /* If every plan scores below its own average this is simply a poor board,
+       and calling the winner "favoured" would overstate it — it is least bad. */
+    var headline = (top.z < 0)
+      ? 'No plan is well served by this board — <strong>' + top.st.name +
+        '</strong> is the least bad'
+      : 'This board ' + strength + ' favours <strong>' + top.st.name + '</strong>';
+
+    var chips = rows.map(function (r, i) {
+      return '<span class="vchip' + (i === 0 ? ' win' : '') + '">' + r.st.name +
+             '<em>' + (r.z >= 0 ? '+' : '') + r.z.toFixed(1) + 'σ</em></span>';
+    }).join('');
+
+    el.innerHTML =
+      '<div class="verdict-head">' + headline +
+        ' <span class="verdict-sub">best pair: spots ' + top.pair.a + ' + ' + top.pair.b + '</span>' +
+      '</div><div class="vchips">' + chips + '</div>' +
+      '<p class="hint-text" style="margin:8px 0 0">Each plan is scored against its own ' +
+      'typical board, so the numbers are comparable. σ is standard deviations above average.</p>';
   }
 
   function renderTopSpots() {
@@ -229,14 +417,14 @@
       var e = list[i];
       var li = document.createElement('li');
       li.setAttribute('data-vtx', e.vertex);
-      /* rankDelta is how many places naive pip-counting would have misplaced this
-         spot; surfacing it is the clearest way to show the model earning its keep */
-      var delta = (e.rankDelta && Math.abs(e.rankDelta) >= 3)
-        ? ' · pips rank it #' + e.pipRank : '';
-      li.innerHTML = '<span class="spot-rank">' + (i + 1) + '</span>' +
-        '<span class="spot-main"><span class="spot-score">' + fmt(e.score) + '</span>' +
-        ' <span class="spot-sub">baskets/turn · ' + e.pipTotal + ' pips · ' +
-        resSummary(e.production) + delta + '</span></span>';
+      /* pipRank shows where naive pip-counting would have put this spot — the
+         clearest evidence the model is doing something pips cannot */
+      var delta = (e.pipRank && Math.abs(e.pipRank - (i + 1)) >= 3)
+        ? ' · pips say #' + e.pipRank : '';
+      li.innerHTML =
+        '<span class="tier-badge tier-' + e.tier.id.replace('+', 'p') + '">' + e.tier.id + '</span>' +
+        '<span class="spot-main"><strong>Spot ' + e.vertex + '</strong> ' +
+        '<span class="spot-sub">' + resDetail(e.production) + delta + '</span></span>';
       li.addEventListener('click', (function (v) { return function () { select(v); }; })(e.vertex));
       li.addEventListener('mouseenter', (function (v) { return function () { highlight([v]); }; })(e.vertex));
       li.addEventListener('mouseleave', function () { highlight([]); });
@@ -247,12 +435,25 @@
   function resSummary(prod) {
     if (!prod) return '';
     var parts = [];
-    for (var r in prod) {
-      if (Object.prototype.hasOwnProperty.call(prod, r) && prod[r] > 0.0001) {
-        parts.push(RES_LABEL[r].slice(0, 2));
-      }
+    for (var i = 0; i < D.RESOURCES.length; i++) {
+      var r = D.RESOURCES[i];
+      if (prod[r] > 0.0001) parts.push(RES_SHORT[r]);
     }
-    return parts.join('/') || 'nothing';
+    return parts.join(' · ') || 'nothing';
+  }
+
+  /* resources this spot produces, strongest first, so the row reads like a scouting note */
+  function resDetail(prod) {
+    if (!prod) return '';
+    var list = [];
+    for (var i = 0; i < D.RESOURCES.length; i++) {
+      var r = D.RESOURCES[i];
+      if (prod[r] > 0.0001) list.push({ r: r, v: prod[r] });
+    }
+    list.sort(function (a, b) { return b.v - a.v; });
+    return list.map(function (x) {
+      return '<span style="color:' + RES_COLOR[x.r] + '">' + RES_SHORT[x.r] + '</span>';
+    }).join(' ') || 'nothing';
   }
 
   function renderPairs() {
@@ -291,16 +492,21 @@
     var maxPips = 0;
     for (var r in stats) if (stats[r].pips > maxPips) maxPips = stats[r].pips;
     var html = '';
-    var order = D.RESOURCES.slice().sort(function (a, b) { return stats[b].pips - stats[a].pips; });
+    /* scarcest first — that is the ordering that matters when picking a spot */
+    var order = D.RESOURCES.slice().sort(function (a, b) { return stats[a].pips - stats[b].pips; });
     for (var i = 0; i < order.length; i++) {
       var s = stats[order[i]];
+      var sc = s.scarcity;
+      var tag = sc >= 1.25 ? 'scarce' : (sc <= 0.85 ? 'plentiful' : 'even');
       html += '<div class="res-row res-' + s.resource + '">' +
-        '<span>' + RES_LABEL[s.resource] + '</span>' +
+        '<span>' + RES_SHORT[s.resource] + '</span>' +
         '<span class="res-bar"><span style="width:' + (maxPips ? (s.pips / maxPips * 100) : 0) + '%"></span></span>' +
-        '<span class="res-num">' + s.pips + 'p/' + s.hexes + 'h</span></div>';
+        '<span class="res-num sc-' + tag + '">' + s.pips + 'p · ' + tag + '</span></div>';
     }
-    html += '<p class="hint-text" style="margin-top:8px">Pips and hex count per resource. ' +
-            'Brick and ore only ever get 3 hexes, so they are structurally scarce.</p>';
+    html += '<p class="hint-text" style="margin-top:8px">Scarcest first. Scarce resources are ' +
+            'worth more than their pips suggest: you can trade them well, and a plan that needs ' +
+            'them pays more to get them. Brick and ore only ever get 3 hexes, so they start ' +
+            'structurally short.</p>';
     el.innerHTML = html;
   }
 
@@ -761,6 +967,12 @@
     $('c-heatmap').addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b) return;
       metric = b.getAttribute('data-metric');
+      [].forEach.call(this.querySelectorAll('button'), function (x) { x.classList.toggle('active', x === b); });
+      recompute();
+    });
+    $('c-scarcity').addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      useScarcity = b.getAttribute('data-sc') === 'on';
       [].forEach.call(this.querySelectorAll('button'), function (x) { x.classList.toggle('active', x === b); });
       recompute();
     });

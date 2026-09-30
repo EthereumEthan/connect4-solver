@@ -6,7 +6,7 @@
 <title>Board Game Lab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -120,6 +120,13 @@
       </div>
     </div>
     <div class="control-group">
+      <label>Scarcity</label>
+      <div class="segmented" id="c-scarcity">
+        <button data-sc="on" class="active">On</button>
+        <button data-sc="off">Off</button>
+      </div>
+    </div>
+    <div class="control-group">
       <label>Edit</label>
       <div class="segmented" id="c-editmode">
         <button data-edit="off" class="active">Off</button>
@@ -131,6 +138,8 @@
 
   <p class="strategy-blurb" id="c-blurb"></p>
 
+  <div class="verdict" id="c-verdict"></div>
+
   <div class="catan-layout">
     <div class="catan-board-wrap">
       <svg id="c-board" class="catan-board" xmlns="http://www.w3.org/2000/svg"
@@ -141,6 +150,11 @@
     <aside class="catan-side">
       <div class="panel-card">
         <h3>Top spots</h3>
+        <div class="tier-legend">
+          <span class="tier-Sp">S+</span><span class="tier-S">S</span><span class="tier-A">A</span>
+          <span class="tier-B">B</span><span class="tier-C">C</span>
+          <span class="legend-note">graded against the best spot on this board</span>
+        </div>
         <ol class="spot-list" id="c-topspots"></ol>
       </div>
       <div class="panel-card">
@@ -207,13 +221,13 @@
   </div>
 </div>
 
-<script src="app.js"></script>
-<script src="catan-geometry.js" defer></script>
-<script src="catan-data.js" defer></script>
-<script src="catan-model.js" defer></script>
-<script src="catan-lab.js" defer></script>
-<script src="catan-vision.js" defer></script>
-<script src="catan-ui.js" defer></script>
-<script src="tabs.js" defer></script>
+<script src="app.js?v=5"></script>
+<script src="catan-geometry.js?v=5" defer></script>
+<script src="catan-data.js?v=5" defer></script>
+<script src="catan-model.js?v=5" defer></script>
+<script src="catan-lab.js?v=5" defer></script>
+<script src="catan-vision.js?v=5" defer></script>
+<script src="catan-ui.js?v=5" defer></script>
+<script src="tabs.js?v=5" defer></script>
 </body>
 </html>
